@@ -23,6 +23,7 @@ import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hive.jdbc.HiveDriver;
+import org.apache.nifi.annotation.behavior.DynamicProperty;
 import org.apache.nifi.annotation.behavior.RequiresInstanceClassLoading;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.Tags;
@@ -35,6 +36,7 @@ import org.apache.nifi.components.ValidationResult;
 import org.apache.nifi.controller.AbstractControllerService;
 import org.apache.nifi.controller.ConfigurationContext;
 import org.apache.nifi.dbcp.DBCPValidator;
+import org.apache.nifi.expression.AttributeExpression;
 import org.apache.nifi.expression.ExpressionLanguageScope;
 import org.apache.nifi.hadoop.KerberosProperties;
 import org.apache.nifi.hadoop.SecurityUtil;
@@ -59,7 +61,6 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -68,12 +69,16 @@ import org.apache.nifi.controller.ControllerServiceInitializationContext;
 import javax.security.auth.login.LoginException;
 
 /**
- * Implementation for Database Connection Pooling Service used for Apache Hive
+ * Implementation for Database Connection Pooling Service used for Apache Hive 3.x
  * connections. Apache DBCP is used for connection pooling functionality.
  */
 @RequiresInstanceClassLoading
 @Tags({"hive", "dbcp", "jdbc", "database", "connection", "pooling", "store"})
 @CapabilityDescription("Provides Database Connection Pooling Service for Apache Hive 3.x. Connections can be asked from pool and returned after usage.")
+@DynamicProperty(name = "JDBC property name", value = "JDBC property value", expressionLanguageScope = ExpressionLanguageScope.VARIABLE_REGISTRY,
+        description = "Specifies a property name and value to be set on the JDBC connection(s). "
+                + "If Expression Language is used, evaluation will be performed upon the controller service being enabled. "
+                + "Note that no flow file input (attributes, e.g.) is available for use in Expression Language constructs for these properties.")
 public class Hive3ConnectionPool extends AbstractControllerService implements Hive3DBCPService {
     private static final String ALLOW_EXPLICIT_KEYTAB = "NIFI_ALLOW_EXPLICIT_KEYTAB";
     /**
@@ -305,6 +310,18 @@ public class Hive3ConnectionPool extends AbstractControllerService implements Hi
     }
 
     @Override
+    protected PropertyDescriptor getSupportedDynamicPropertyDescriptor(final String propertyDescriptorName) {
+        return new PropertyDescriptor.Builder()
+                .name(propertyDescriptorName)
+                .required(false)
+                .addValidator(StandardValidators.createAttributeExpressionLanguageValidator(AttributeExpression.ResultType.STRING, true))
+                .addValidator(StandardValidators.ATTRIBUTE_KEY_PROPERTY_NAME_VALIDATOR)
+                .expressionLanguageSupported(ExpressionLanguageScope.VARIABLE_REGISTRY)
+                .dynamic(true)
+                .build();
+    }
+
+    @Override
     protected Collection<ValidationResult> customValidate(ValidationContext validationContext) {
         boolean confFileProvided = validationContext.getProperty(HIVE_CONFIGURATION_RESOURCES).isSet();
 
@@ -393,14 +410,6 @@ public class Hive3ConnectionPool extends AbstractControllerService implements Hi
         final Configuration hiveConfig = hiveConfigurator.getConfigurationFromFiles(configFiles);
         final String validationQuery = context.getProperty(VALIDATION_QUERY).evaluateAttributeExpressions().getValue();
 
-        // add any dynamic properties to the Hive configuration
-        for (final Map.Entry<PropertyDescriptor, String> entry : context.getProperties().entrySet()) {
-            final PropertyDescriptor descriptor = entry.getKey();
-            if (descriptor.isDynamic()) {
-                hiveConfig.set(descriptor.getName(), context.getProperty(descriptor).evaluateAttributeExpressions().getValue());
-            }
-        }
-
         final String drv = HiveDriver.class.getName();
         if (SecurityUtil.isSecurityEnabled(hiveConfig)) {
             final String explicitPrincipal = context.getProperty(kerberosProperties.getKerberosPrincipal()).evaluateAttributeExpressions().getValue();
@@ -470,6 +479,10 @@ public class Hive3ConnectionPool extends AbstractControllerService implements Hi
         dataSource.setTimeBetweenEvictionRunsMillis(timeBetweenEvictionRunsMillis);
         dataSource.setMinEvictableIdleTimeMillis(minEvictableIdleTimeMillis);
         dataSource.setSoftMinEvictableIdleTimeMillis(softMinEvictableIdleTimeMillis);
+        // Set any dynamic (user-defined) properties on the DataSource
+        context.getProperties().keySet().stream().filter(PropertyDescriptor::isDynamic)
+                .forEach((dynamicPropDescriptor) -> dataSource.addConnectionProperty(dynamicPropDescriptor.getName(),
+                        context.getProperty(dynamicPropDescriptor).evaluateAttributeExpressions().getValue()));
     }
 
     private Long extractMillisWithInfinite(PropertyValue prop) {
@@ -482,7 +495,9 @@ public class Hive3ConnectionPool extends AbstractControllerService implements Hi
     @OnDisabled
     public void shutdown() {
         try {
-            dataSource.close();
+            if (dataSource != null) {
+                dataSource.close();
+            }
         } catch (final SQLException e) {
             throw new ProcessException(e);
         }

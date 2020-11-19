@@ -17,20 +17,6 @@
 
 package org.apache.nifi.dbcp.hive;
 
-import static org.junit.Assert.assertEquals;
-import static org.mockito.ArgumentMatchers.isA;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-
-import java.io.File;
-import java.io.IOException;
-import java.lang.reflect.Field;
-import java.lang.reflect.UndeclaredThrowableException;
-import java.security.PrivilegedExceptionAction;
-import java.sql.SQLException;
-import java.util.HashMap;
-import java.util.Map;
-
 import org.apache.commons.dbcp.BasicDataSource;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.nifi.components.PropertyDescriptor;
@@ -38,15 +24,39 @@ import org.apache.nifi.controller.AbstractControllerService;
 import org.apache.nifi.expression.ExpressionLanguageScope;
 import org.apache.nifi.hadoop.KerberosProperties;
 import org.apache.nifi.logging.ComponentLog;
+import org.apache.nifi.processor.AbstractProcessor;
+import org.apache.nifi.processor.ProcessContext;
+import org.apache.nifi.processor.ProcessSession;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.registry.VariableDescriptor;
 import org.apache.nifi.reporting.InitializationException;
 import org.apache.nifi.util.MockConfigurationContext;
 import org.apache.nifi.util.MockVariableRegistry;
+import org.apache.nifi.util.TestRunner;
+import org.apache.nifi.util.TestRunners;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Ignore;
 import org.junit.Test;
+
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.UndeclaredThrowableException;
+import java.security.PrivilegedExceptionAction;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.mockito.ArgumentMatchers.isA;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class HiveConnectionPoolTest {
     private UserGroupInformation userGroupInformation;
@@ -55,6 +65,13 @@ public class HiveConnectionPoolTest {
     private ComponentLog componentLog;
     private KerberosProperties kerberosProperties;
     private File krb5conf = new File("src/test/resources/krb5.conf");
+    private TestRunner runner;
+    private static final String DB_LOCATION = "target/db";
+
+    @BeforeClass
+    public static void setupBeforeClass() {
+        System.setProperty("derby.stream.error.file", "target/derby.log");
+    }
 
     @Before
     public void setup() throws Exception {
@@ -90,7 +107,9 @@ public class HiveConnectionPoolTest {
                 .expressionLanguageSupported(ExpressionLanguageScope.VARIABLE_REGISTRY)
                 .build());
 
+        runner = TestRunners.newTestRunner(MockProcessor.class);
         initPool();
+        runner.addControllerService("1", hiveConnectionPool);
     }
 
     private void initPool() throws Exception {
@@ -152,7 +171,6 @@ public class HiveConnectionPoolTest {
         registry.setVariable(new VariableDescriptor("maxwait"), MAX_WAIT);
         registry.setVariable(new VariableDescriptor("hiveconf"), CONF);
 
-
         MockConfigurationContext context = new MockConfigurationContext(props, null, registry);
         hiveConnectionPool.onConfigured(context);
 
@@ -192,5 +210,48 @@ public class HiveConnectionPoolTest {
 
         MockConfigurationContext context = new MockConfigurationContext(props, null, registry);
         hiveConnectionPool.onConfigured(context);
+    }
+
+    @Test
+    public void testValidWithDynamicProperty() throws Exception {
+        // set embedded Derby database connection url
+        runner.setProperty(hiveConnectionPool, HiveConnectionPool.DATABASE_URL, "jdbc:derby:" + DB_LOCATION);
+        runner.setProperty(hiveConnectionPool, HiveConnectionPool.DB_USER, "tester");
+        runner.setProperty(hiveConnectionPool, HiveConnectionPool.DB_PASSWORD, "testerp");
+        runner.setProperty(hiveConnectionPool, "create", "true");
+        runner.assertValid(hiveConnectionPool);
+
+        // remove previous test database, if any
+        final File dbLocation = new File(DB_LOCATION);
+        dbLocation.delete();
+
+        runner.enableControllerService(hiveConnectionPool);
+
+        Connection connection = hiveConnectionPool.getConnection();
+        assertNotNull(connection);
+        connection.close(); // will return connection to pool
+        connection = hiveConnectionPool.getConnection();
+        assertNotNull(connection);
+        connection.close(); // will return connection to pool
+    }
+
+    public static class MockProcessor extends AbstractProcessor {
+        static final PropertyDescriptor HIVE_CONNECTION_POOL = new PropertyDescriptor.Builder()
+                .name("Hive Connection Pool")
+                .required(true)
+                .identifiesControllerService(HiveConnectionPool.class)
+                .build();
+
+        static final List<PropertyDescriptor> PROPS = Collections.singletonList(HIVE_CONNECTION_POOL);
+
+        @Override
+        public List<PropertyDescriptor> getSupportedPropertyDescriptors() {
+            return PROPS;
+        }
+
+        @Override
+        public void onTrigger(ProcessContext context, ProcessSession session) throws ProcessException {
+
+        }
     }
 }
