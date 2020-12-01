@@ -64,7 +64,7 @@ public class Hive3ConnectionPoolTest {
     private BasicDataSource basicDataSource;
     private ComponentLog componentLog;
     private KerberosProperties kerberosProperties;
-    private File krb5conf = new File("src/test/resources/krb5.conf");
+    private final File krb5conf = new File("src/test/resources/krb5.conf");
     private TestRunner runner;
     private static final String DB_LOCATION = "target/db";
 
@@ -202,6 +202,45 @@ public class Hive3ConnectionPoolTest {
         assertEquals(MAX_CONN, basicDataSource.getMaxTotal());
         assertEquals(10000L, basicDataSource.getMaxWaitMillis());
         assertEquals(URL, hive3ConnectionPool.getConnectionURL());
+    }
+
+    @Ignore("This test doesn't work with DBCP2, it throws an exception \"Cannot create JDBC driver of class 'org.apache.hive.jdbc.HiveDriver' for connect URL 'jdbc:derby:target/db'\"")
+    @Test
+    public void testDynamicProperties() throws InitializationException, SQLException {
+        assertConnectionNotNullDynamicProperty("create", "true");
+    }
+
+    @Ignore("This test doesn't work with DBCP2, it throws an exception \"Cannot create JDBC driver of class 'org.apache.hive.jdbc.HiveDriver' for connect URL 'jdbc:derby:target/db'\"")
+    @Test
+    public void testExpressionLanguageDynamicProperties() throws InitializationException, SQLException {
+        assertConnectionNotNullDynamicProperty("create", "${literal(1):gt(0)}");
+    }
+
+    @Ignore("This test doesn't work with DBCP2, it throws an exception \"Cannot create JDBC driver of class 'org.apache.hive.jdbc.HiveDriver' for connect URL 'jdbc:derby:target/db'\"")
+    @Test
+    public void testSensitiveDynamicProperties() throws InitializationException, SQLException {
+        assertConnectionNotNullDynamicProperty("SENSITIVE.create", "true");
+    }
+
+    private void assertConnectionNotNullDynamicProperty(final String propertyName, final String propertyValue) throws InitializationException, SQLException {
+        // remove previous test database, if any
+        final File dbLocation = new File(DB_LOCATION);
+        dbLocation.delete();
+
+        final Hive3ConnectionPool service = new Hive3ConnectionPool();
+        runner.addControllerService(Hive3ConnectionPool.class.getSimpleName(), service);
+
+        runner.setProperty(service, Hive3ConnectionPool.DATABASE_URL, "jdbc:derby:" + DB_LOCATION);
+        runner.setProperty(service, Hive3ConnectionPool.DB_USER, "tester");
+        runner.setProperty(service, Hive3ConnectionPool.DB_PASSWORD, "testerp");
+        runner.setProperty(service, propertyName, propertyValue);
+
+        runner.enableControllerService(service);
+        runner.assertValid(service);
+
+        try (final Connection connection = service.getConnection()) {
+            assertNotNull(connection);
+        }
     }
 
     @Ignore("Kerberos does not seem to be properly handled in Travis build, but, locally, this test should successfully run")

@@ -63,7 +63,7 @@ public class Hive_1_1ConnectionPoolTest {
     private Hive_1_1ConnectionPool hiveConnectionPool;
     private BasicDataSource basicDataSource;
     private ComponentLog componentLog;
-    private File krb5conf = new File("src/test/resources/krb5.conf");
+    private final File krb5conf = new File("src/test/resources/krb5.conf");
     private TestRunner runner;
     private static final String DB_LOCATION = "target/db";
 
@@ -166,6 +166,42 @@ public class Hive_1_1ConnectionPoolTest {
         assertEquals(MAX_CONN, basicDataSource.getMaxActive());
         assertEquals(10000L, basicDataSource.getMaxWait());
         assertEquals(URL, hiveConnectionPool.getConnectionURL());
+    }
+
+    @Test
+    public void testDynamicProperties() throws InitializationException, SQLException {
+        assertConnectionNotNullDynamicProperty("create", "true");
+    }
+
+    @Test
+    public void testExpressionLanguageDynamicProperties() throws InitializationException, SQLException {
+        assertConnectionNotNullDynamicProperty("create", "${literal(1):gt(0)}");
+    }
+
+    @Test
+    public void testSensitiveDynamicProperties() throws InitializationException, SQLException {
+        assertConnectionNotNullDynamicProperty("SENSITIVE.create", "true");
+    }
+
+    private void assertConnectionNotNullDynamicProperty(final String propertyName, final String propertyValue) throws InitializationException, SQLException {
+        // remove previous test database, if any
+        final File dbLocation = new File(DB_LOCATION);
+        dbLocation.delete();
+
+        final Hive_1_1ConnectionPool service = new Hive_1_1ConnectionPool();
+        runner.addControllerService(Hive_1_1ConnectionPool.class.getSimpleName(), service);
+
+        runner.setProperty(service, Hive_1_1ConnectionPool.DATABASE_URL, "jdbc:derby:" + DB_LOCATION);
+        runner.setProperty(service, Hive_1_1ConnectionPool.DB_USER, "tester");
+        runner.setProperty(service, Hive_1_1ConnectionPool.DB_PASSWORD, "testerp");
+        runner.setProperty(service, propertyName, propertyValue);
+
+        runner.enableControllerService(service);
+        runner.assertValid(service);
+
+        try (final Connection connection = service.getConnection()) {
+            assertNotNull(connection);
+        }
     }
 
     @Ignore("Kerberos does not seem to be properly handled in Travis build, but, locally, this test should successfully run")
