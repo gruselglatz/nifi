@@ -53,6 +53,7 @@ import org.apache.nifi.util.StopWatch;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -104,7 +105,6 @@ public class JSLTTransformJSON extends AbstractProcessor {
     private Set<Relationship> relationships;
     private static final JsonFactory jsonFactory = new JsonFactory();
     private static final ObjectMapper codec = new ObjectMapper();
-    private final static String DEFAULT_CHARSET = "UTF-8";
 
     private final AtomicReference<Expression> precompiledExpression = new AtomicReference<>();
 
@@ -220,7 +220,7 @@ public class JSLTTransformJSON extends AbstractProcessor {
             return;
         }
 
-        FlowFile transformed = session.write(original, out -> out.write(jsonString.getBytes(DEFAULT_CHARSET)));
+        FlowFile transformed = session.write(original, out -> out.write(jsonString.getBytes(StandardCharsets.UTF_8)));
 
         final String transformType = context.getProperty(JSLT_TRANSFORM).getValue();
         transformed = session.putAttribute(transformed, CoreAttributes.MIME_TYPE.key(), "application/json");
